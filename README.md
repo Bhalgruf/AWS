@@ -1,4 +1,28 @@
-# Terraform AWS Autoscaling
+# Terraform AWS VPC
+
+## :package: Install Terraform
+
+Install Terraform by following the [documentation](https://www.terraform.io/downloads.html)
+
+Make sure `terraform` is working properly
+
+```hcl
+$ terraform
+Usage: terraform [--version] [--help] <command> [args]
+
+The available commands for execution are listed below.
+The most common, useful commands are shown first, followed by
+less common or more advanced commands. If you're just getting
+started with Terraform, stick with the common commands. For the
+other commands, please read the help and docs before usage.
+
+Common commands:
+    apply              Builds or changes infrastructure
+    console            Interactive console for Terraform interpolations
+# ...
+```
+
+*Based on [standard module structure](https://www.terraform.io/docs/modules/create.html#standard-module-structure) guidelines*
 
 ## :triangular_ruler: Naming Convention
 
@@ -10,79 +34,69 @@ Common variables referenced in naming standards
 
 ---
 
-## :triangular_ruler: AWS - Resource Naming Standards
+## AWS - Resource Naming Standards
 
-* ALB
+| AWS Resource     | Resource Naming                          | Comment | Example                          |
+|:-----------------|:-----------------------------------------|:--------|:---------------------------------|
+| VPC              | `<vpc_name>-vpc`                         |         | `mycloud-vpc`                    |
+| Subnets          | `<vpc_name>-private-<availability_zone>` |         | `mycloud-private-us-east-1b` |
+|                  | `<vpc_name>-public-<availability_zone>`                      |         | `mycloud-public-us-east-1b`             |
+| Route Tables     | `<vpc_name>-private-<availability_zone>` |         | `mycloud-private-us-east-1b` |
+|                  | `<vpc_name>-public`                      |         | `mycloud-public`             |
+| Internet Gateway | `<vpc_name>-igw`                         |         | `mycloud-igw`                |
+| Nat Gateway      | `<vpc_name>-nat-<availability_zone>`     |         | `mycloud-nat-us-east-1b`     |
 
-| AWS Resource        | Resource Naming          | Comment              | Example                                 |
-|:--------------------|:-------------------------|:---------------------|:----------------------------------------|
-| ALB                 | `<app_name>-alb-private` | Tag `Tier = private` | `web-api-alb-private`                   |
-|                     | `<app_name>-alb-public`  | Tag `Tier = public`  | `web-api-alb-public`                    |
-| ALB Target group    | `<app_name>-<protocol>`  |                      | `web-api-alb-http`, `web-api-alb-https` |
-| ALB Security Groups | `<app_name>-alb`         |                      | `web-api-alb`                           |
 
+## 1. Create a `VPC`
 
-* ASG
+The really first stage for bootstrapping an AWS account is to create a `VPC`
 
-| AWS Resource        | Resource Naming             | Comment | Example                 |
-|:--------------------|:----------------------------|:--------|:------------------------|
-| ASG Security Groups | `<app_name>`                |         | `web-api`               |
-| ASG Launch Config   | `<app_name>-lc-<timestamp>` |         | `web-api-lc-1537774225` |
-| ASG Launch Template | `<app_name>-lt-<timestamp>` |         | `web-api-lt-1537774225` |
+* [aws_vpc](https://www.terraform.io/docs/providers/aws/r/vpc.html)
 
----
+![VPC AZs](./docs/2-vpc-azs.png)
 
-## :crystal_ball: Terraform Discovery module
+## 2. Create `public` and `private` Subnets
 
-If you followed the naming conventions listed in [terraform-aws-vpc](https://github.com/Lowess/terraform-aws-vpc) you will find it useful to use this [terraform-aws-discovery](https://github.com/Lowess/terraform-aws-discovery) module. The idea of using a discovery module is to centralize `datasource` usage in a central place and keep the source code DRY.
+Then create `public` and `private` subnets in each `AZs` (`us-east-1a`, `us-east-1b`, `us-east-1c`)
 
-Here is an example usage:
+* [aws_subnet](https://www.terraform.io/docs/providers/aws/r/subnet.html)
 
-```hcl
-module "discovery" {
-  source              = "github.com/Lowess/terraform-aws-discovery"
-  aws_region          = var.aws_region
-  vpc_name            = var.vpc_name
-  ec2_ami_names       = ["<AMI-NAME>"]
-  ec2_ami_owners      = "<TEACHER-ACCOUNT-ID>"
-  ec2_security_groups = [...]
-}
+![VPC AZs Subnets](./docs/3-vpc-azs-subnets.png)
+
+## 3. Create `internet` and `nat` Gateways
+
+Create one `internet gateway` so that the `VPC` can communicate with the outisde world. For instances located in `private` subnets, we will need `NAT` instances to be setup in each `availability zones`
+
+* [aws_internet_gateway](https://www.terraform.io/docs/providers/aws/r/internet_gateway.html)
+* [aws_ami](https://www.terraform.io/docs/providers/aws/d/ami.html)
+    * > :point_up: Use the following AMI Name `amzn-ami-vpc-nat-2018.03.0.2021*` provided by Amazon (owners = `amazon`)
+* [aws_security_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group)
+    * > :warning: Do not use inline `ingress` or `egress`, use [aws_security_group_rule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group_rule)
+* [aws_key_pair](https://www.terraform.io/docs/providers/aws/r/key_pair.html)
+* [aws_instance](https://www.terraform.io/docs/providers/aws/r/instance.html)
+    * > :warning: Make sure you use `vpc_security_group_ids` and not `security_groups`
+    * > :warning: Make sure to set `source_dest_check = false`. [Read more about it here](https://docs.aws.amazon.com/fr_fr/vpc/latest/userguide/VPC_NAT_Instance.html#EIP_Disable_SrcDestCheck)
+* [aws_eip](https://www.terraform.io/docs/providers/aws/r/eip.html)
+* [aws_eip_association](https://www.terraform.io/docs/providers/aws/r/eip_association.html)
+
+![VPC AZs Subnets GW](./docs/4-vpc-azs-subnets-gw.png)
+
+## 4. Create `route tables` and `routes`
+
+Finaly, link the infrastructure together by creating `route tables` and `routes` so that servers from `public` and `private` subnets can send their traffic to the respective gateway, either the `internet gateway` or the `NAT` ones.
+
+* [aws_route_table](https://www.terraform.io/docs/providers/aws/r/route_table.html)
+* [aws_route](https://www.terraform.io/docs/providers/aws/r/route.html)
+* [aws_route_table_association](https://www.terraform.io/docs/providers/aws/r/route_table_association.html)
+
+![VPC AZs Subnets GW Routes](./docs/5-vpc-azs-subnets-gw-routing.png)
+
+## Tips and Tricks
+
+* Connect to AWS private instance using a NAT server as a jumphost
+
+```sh
+eval $(ssh-agent)
+ssh-add <keypair.pem>
+ssh -i key-pair/aws-educate-student.pem -J ec2-user@<public-NAT-IP> -A ec2-user@<private-EC2-IP>
 ```
-
-> :point_up: If you do not what to use this module you are free to redefine the datasources you need but keep in mind that you will be rebuilding the wheel :ferris_wheel:
-
----
-
-## 1. Create an `AWS ALB`
-
-Let's create an `ALB` and the related resources needed (security groups, listeners and target groups).
-
-* [aws_lb](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb)
-* [aws_lb_target_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_target_group)
-* [aws_lb_listener](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lb_listener)
-* [aws_security_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group)
-* [aws_security_group_rule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group_rule)
-
-![ALB](./docs/1-alb.png)
-
-## 2. Create the `AWS Autoscaling group`
-
-* [aws_security_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group)
-* [aws_security_group_rule](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group_rule)
-* [aws_launch_template](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/launch_template)
-* [aws_autoscaling_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group)
-    * > :warning: Make sure you use `vpc_zone_identifier` and not `availability_zones`
-    * > :warning: Use `min_size = 1` and `max_size = 2` as AWS educate sets limits on your accounts !
-
-![ALB & ASG](./docs/2-alb-asg.png)
-
-## [BONUS] 3. Create policies to make the `AWS Autoscaling group` scale in/out
-
-* Visit the `Cloudwatch` service and discover what this service does
-
-> :point_up: Think about what's the best metric to use in order to adjust the size of the Autoscaling group
-
-* [aws_autoscaling_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_policy)
-    * > Define the scaling strategy (add / remove machines)
-* [aws_cloudwatch_metric_alarm](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm)
-    * > Define an alarm that will trigger the autoscaling policy
